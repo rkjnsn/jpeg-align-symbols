@@ -1,0 +1,8 @@
+[package]
+
+name = "compressible_jpeg"
+version = "0.0.1"
+authors = ["Erik Jensen <erikjensen@rkjnsn.net>"]
+
+[dependencies]
+getopts="*"

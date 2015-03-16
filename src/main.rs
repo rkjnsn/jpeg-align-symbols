@@ -4,6 +4,7 @@
 extern crate getopts;
 use std::error::Error;
 use std::fs;
+use std::io;
 
 mod process_jpeg;
 
@@ -27,8 +28,9 @@ fn main() {
 		return;
 	} else if let (Some(input), Some(output))
 			= (matches.opt_str("i"), matches.opt_str("o")) {
-		match process_jpeg::process_jpeg(&mut fs::File::open(&input).unwrap(),
-				&mut fs::File::create(&output).unwrap()) {
+		match process_jpeg::process_jpeg(
+				&mut io::BufReader::new(fs::File::open(&input).unwrap()),
+				&mut io::BufWriter::new(fs::File::create(&output).unwrap())) {
 			Ok(()) => println!("Success!"),
 			Err(err) => println!("Error: {}", err.description()),
 		}

@@ -1,8 +1,9 @@
 [package]
 
-name = "compressible_jpeg"
+name = "jpeg_align_symbols"
 version = "0.0.1"
 authors = ["Erik Jensen <erikjensen@rkjnsn.net>"]
 
 [dependencies]
 getopts="*"
+byteorder="*"

@@ -195,7 +195,7 @@ impl<W: Write> BitWriter<W> {
 }
 
 const MAX_HUFF_CODE_LEN: u8 = 16;
-const MAX_HUFF_SYMBOLS: u16 = 162;
+const MAX_HUFF_SYMBOLS: u16 = 256;
 
 struct Symbol {
 	symbol: u8,
@@ -787,6 +787,126 @@ impl JpegData {
 
 		Ok(())
 	}
+
+	fn calc_huffman_tables<'a, I: Iterator<Item = &'a [Symbol]>>(
+			iter: &'a mut I) -> (HuffmanTable, HuffmanTable) {
+		let mut dc_counts = [0u64; 256];
+		let mut ac_counts = [0u64; 256];
+
+		for slice in iter {
+			dc_counts[slice.first().unwrap().symbol as usize] += 1;
+			for symbol in slice.tail() {
+				ac_counts[symbol.symbol as usize] +=1;
+			}
+		}
+
+		struct SymbolCount {
+			symbol: u8,
+			length: u8,
+			count: u64,
+		}
+
+		let mut dc_table = HuffmanTable { id: 0, coef_type: CoefficientType::DC,
+				counts: [0; 16], symbols: [0; 256] };
+		let mut ac_table = HuffmanTable { id: 0, coef_type: CoefficientType::AC,
+				counts: [0; 16], symbols: [0; 256] };
+
+		fn encoding_space_cost(length: u8) -> u16 {
+			0x1 << 16 - length as u16
+		}
+
+		for &mut(counts, &mut ref mut table) in [(&dc_counts, &mut dc_table),
+				(&ac_counts, &mut ac_table)].iter_mut() {
+			let mut vec = vec![];
+
+			// Maximum pontential space left in the huffman tree
+			let mut encoding_space = 0x1u32 << 16;
+
+			// Convert counts into a vec using largest aligned encoding and
+			// update available encoding space
+			for (symbol, &count) in counts.iter().enumerate()
+					.filter(|&(_, &c)| c != 0) {
+				let length = 16 - symbol as u8 % 8;
+				encoding_space -= encoding_space_cost(length) as u32;
+				vec.push(SymbolCount { symbol: symbol as u8,
+						length: length, count: count });
+			}
+
+			// Sort array by descending priority. Priority is determined both
+			// by the frequency and by how expensive it is to premote a symbol
+			// to a shorter aligned representation.
+			vec.sort_by(|a, b| (a.count * (0x80 >> a.symbol as u64 % 8))
+					.cmp(&(b.count * (0x80 >> b.symbol as u64 % 8))).reverse());
+
+			// Promote as many symbols as we can. Don't bail out when the first
+			// symbol can't be promoted, since there could be less costly
+			// symbols with lower priority.
+			for symbol in vec.iter_mut() {
+				if encoding_space + encoding_space_cost(symbol.length) as u32
+						> encoding_space_cost(symbol.length - 8) as u32 {
+					encoding_space -=
+							encoding_space_cost(symbol.length - 8) as u32
+							- encoding_space_cost(symbol.length) as u32;
+					symbol.length -= 8;
+				}
+			}
+
+			// Resort by ascending length
+			vec.sort_by(|a, b| a.length.cmp(&b.length));
+
+			// And finally write to output structure
+			for (table_v, vec_v) in table.symbols.iter_mut().zip(vec.iter()) {
+				*table_v = vec_v.symbol;
+				table.counts[vec_v.length as usize - 1] += 1;
+			}
+			// println!("{:?}", table.counts.as_slice());
+			// println!("{:?}", table.symbols.as_slice());
+		}
+		(dc_table, ac_table)
+	}
+
+	fn replace_huffman_tables(&mut self) {
+		let (dc_table, ac_table) = JpegData::calc_huffman_tables(
+				&mut self.components.iter().flat_map(
+					|c| SplitIter::new(&c.symbols, &c.block_offsets[1..])));
+		self.huff_tables.clear();
+		self.huff_tables.push(dc_table);
+		self.huff_tables.push(ac_table);
+		for component in &mut self.components {
+			component.dc_huff_table_id = 0;
+			component.ac_huff_table_id = 0;
+		}
+	}
+
+	// Only used for debugging
+	#[allow(dead_code)]
+	fn print_symbol_stats(&self) {
+		for component in &self.components {
+			let mut dc_symbol_counts = [0u32; 256];
+			let mut ac_symbol_counts = [0u32; 256];
+
+			let slice_iter = SplitIter::new(&component.symbols,
+					&component.block_offsets[1..]);
+
+			for slice in slice_iter {
+				dc_symbol_counts[slice.first().unwrap().symbol as usize] += 1;
+				for symbol in slice.tail() {
+					ac_symbol_counts[symbol.symbol as usize] +=1;
+				}
+			}
+
+			println!("Component: {}", component.id);
+			for &(coef, syms) in [("DC", &dc_symbol_counts),
+					("AC", &ac_symbol_counts)].iter() {
+				println!("{}", coef);
+				for (i, &sym) in syms.iter().enumerate() {
+					if sym != 0 {
+						println!("{:02X}: {}", i, sym);
+					}
+				}
+			}
+		}
+	}
 }
 
 fn fill_buffer<R: io::Read + ?Sized>(input: &mut R, buffer: &mut [u8])
@@ -805,7 +925,8 @@ fn fill_buffer<R: io::Read + ?Sized>(input: &mut R, buffer: &mut [u8])
 
 pub fn process_jpeg<R: io::Read + ?Sized, W: io::Write + ?Sized>(
 		input: &mut R, output: &mut W) -> Result<(), Error> {
-	let jpeg_data = try!(JpegData::read_jpeg(input));
+	let mut jpeg_data = try!(JpegData::read_jpeg(input));
+	jpeg_data.replace_huffman_tables();
 	try!(jpeg_data.write_jpeg(output));
 	Ok(())
 }

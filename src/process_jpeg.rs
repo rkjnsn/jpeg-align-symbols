@@ -788,6 +788,7 @@ impl JpegData {
 		Ok(())
 	}
 
+	// Calculate an aligned huffman table as compact as possible
 	fn calc_huffman_tables<'a, I: Iterator<Item = &'a [Symbol]>>(
 			iter: &'a mut I) -> (HuffmanTable, HuffmanTable) {
 		let mut dc_counts = [0u64; 256];
@@ -832,22 +833,41 @@ impl JpegData {
 						length: length, count: count });
 			}
 
-			// Sort array by descending priority. Priority is determined both
-			// by the frequency and by how expensive it is to premote a symbol
-			// to a shorter aligned representation.
-			vec.sort_by(|a, b| (a.count * (0x80 >> a.symbol as u64 % 8))
-					.cmp(&(b.count * (0x80 >> b.symbol as u64 % 8))).reverse());
+			// Knapsack Problem
+			// Table is over 40 MiB. Maybe try meet-in-the-middle?
+			let mut max_counts = vec![0; (encoding_space as usize + 1)
+					* (vec.len() + 1)];
+			{
+				let mut row_iter = max_counts.chunks_mut(
+						encoding_space as usize + 1);
+				let mut prev_row = row_iter.next().unwrap();
+				for (mut row, sym) in row_iter.zip(vec.iter()) {
+					let cost = encoding_space_cost(sym.length - 8)
+							- encoding_space_cost(sym.length);
+					for j in 0..encoding_space as usize + 1 {
+						row[j] = if cost as usize <= j {
+							cmp::max(prev_row[j],
+									prev_row[j - cost as usize] + sym.count)
+						} else {
+							prev_row[j]
+						}
+					}
+					prev_row = row;
+				}
+			}
 
-			// Promote as many symbols as we can. Don't bail out when the first
-			// symbol can't be promoted, since there could be less costly
-			// symbols with lower priority.
-			for symbol in vec.iter_mut() {
-				if encoding_space + encoding_space_cost(symbol.length) as u32
-						> encoding_space_cost(symbol.length - 8) as u32 {
-					encoding_space -=
-							encoding_space_cost(symbol.length - 8) as u32
-							- encoding_space_cost(symbol.length) as u32;
-					symbol.length -= 8;
+			{
+				let mut row_iter = max_counts.chunks_mut(
+						encoding_space as usize + 1).rev();
+				let mut row = row_iter.next().unwrap();
+				let mut j = encoding_space as usize;
+				for (mut prev_row, sym) in row_iter.zip(vec.iter_mut().rev()) {
+					if row[j] != prev_row[j] {
+						j -= (encoding_space_cost(sym.length - 8)
+							- encoding_space_cost(sym.length)) as usize;
+						sym.length -= 8;
+					}
+					row = prev_row;
 				}
 			}
 

@@ -243,29 +243,14 @@ impl HuffmanTable {
 		ParseError::Syntax.err() // Not a valid code
 	}
 
-	/*fn encode_symbol<W: Write>(&self, symbol: u8, output: &mut BitWriter<W>)
-			-> Result<(), Error> {
-		let mut offset = 0;
-		let mut symbols: &[u8] = &self.symbols;
-		for (level, &count) in (0..).zip(self.counts.iter()) {
-			let (left, right) = symbols.split_at(count as usize);
-			if let Some(index) = left.position_elem(&symbol) {
-				return JpegData::write_bits(offset + index as u16,
-						level + 1, output);
-			}
-			offset = (offset + count as u16) * 2;
-			symbols = right;
-		}
-		ParseError::Syntax.err() // Not a valid symbol
-	}*/
 	fn encode_symbol<W: Write>(&self, symbol: u8, output: &mut BitWriter<W>)
 			-> Result<(), Error> {
 		if let Some(mut index) = self.symbols.position_elem(&symbol) {
 			let mut offset = 0;
-			for (level, &count) in (0..).zip(self.counts.iter()) {
+			for (level, &count) in self.counts.iter().enumerate() {
 				if index < count as usize {
 					return JpegData::write_bits(offset + index as u16,
-							level + 1, output);
+							level as u8 + 1, output);
 				}
 				offset = (offset + count as u16) * 2;
 				index -= count as usize;
